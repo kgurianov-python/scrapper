@@ -1,5 +1,6 @@
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 import requests as requests
 from bs4 import BeautifulSoup, Tag, SoupStrainer
@@ -13,6 +14,8 @@ logger.setLevel(logging.DEBUG)
 BASE_URL = "https://carleton.ca/scs/our-people/school-of-computer-science-faculty/"
 HEADER = {'Accept-Language': 'en-US',
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36'}
+
+FILENAME = "people.json"
 
 
 def get_person_table_info(table_info: Tag):
@@ -63,9 +66,14 @@ def get_person_info(url: str) -> {}:
     return result
 
 
-def get_faculty_people(faculty: Tag) -> []:
+def get_faculty_people_links(faculty: Tag) -> []:
     people_cards = faculty.find_all('a')
     return [card['href'] for card in people_cards]
+
+
+def get_faculty_people_from_links(key, val) -> {}:
+    logger.debug(f"Processing: {key}")
+    return {key: [get_person_info(href) for href in val]}
 
 
 def get_faculties_list_with_links(soup: Tag) -> dict[str, Tag]:
@@ -76,7 +84,7 @@ def get_faculties_list_with_links(soup: Tag) -> dict[str, Tag]:
         faculty_data: Tag = faculty.next_element
         while faculty_data.name != 'section':
             faculty_data = faculty_data.next_element
-        result.update({faculty.text: get_faculty_people(faculty_data)})
+        result.update({faculty.text: get_faculty_people_links(faculty_data)})
     return result
 
 
@@ -88,8 +96,15 @@ def main():
 
     faculties_with_links = get_faculties_list_with_links(soup)
 
-    for link in faculties_with_links['School Faculty']:
-        print(json.dumps(get_person_info(link), indent=4))
+    result_dict = {}
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        # submit tasks and process results
+        for result in executor.map(get_faculty_people_from_links, faculties_with_links.keys(),
+                                   faculties_with_links.values()):
+            result_dict.update(result)
+
+    with open(FILENAME, 'w') as json_file:
+        json.dump(result_dict, json_file, indent=4)
 
 
 if __name__ == '__main__':
