@@ -1,6 +1,6 @@
+import asyncio
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor
 import time
 
 import requests as requests
@@ -51,10 +51,10 @@ def get_person_blob_info(person_article: Tag) -> []:
     return result
 
 
-def get_person_info(url: str) -> {}:
+def get_person_info(key: str, url: str) -> {}:
     result = {}
     resp = requests.get(url, headers=HEADER)
-    logger.debug(url)
+    logger.debug(f"Processing: {key}: {url}")
     person_article = BeautifulSoup(resp.content, 'html.parser', parse_only=SoupStrainer('article'))
 
     person_detail = person_article.find("div", {"class": "people__details"})
@@ -64,7 +64,12 @@ def get_person_info(url: str) -> {}:
 
     result.update({"contacts": get_person_table_info(person_detail)})
     result.update({"research": get_person_blob_info(person_article)})
+    logger.debug(f"Done processing: {key}: {url}")
     return result
+
+
+async def get_person_info_async(key: str, url: str) -> {}:
+    return await asyncio.to_thread(get_person_info, key, url)
 
 
 def get_faculty_people_links(faculty: Tag) -> []:
@@ -72,9 +77,11 @@ def get_faculty_people_links(faculty: Tag) -> []:
     return [card['href'] for card in people_cards]
 
 
-def get_faculty_people_from_links(key, val) -> {}:
+async def get_faculty_people_from_links(key, val) -> {}:
     logger.debug(f"Processing: {key}")
-    return {key: [get_person_info(href) for href in val]}
+    people = await asyncio.gather(*[get_person_info_async(key, href) for href in val],)
+    logger.debug(f"Done processing: {key}")
+    return {key: people}
 
 
 def get_faculties_list_with_links(soup: Tag) -> dict[str, Tag]:
@@ -89,7 +96,7 @@ def get_faculties_list_with_links(soup: Tag) -> dict[str, Tag]:
     return result
 
 
-def main():
+async def main():
     resp = requests.get(BASE_URL, headers=HEADER)
 
     soup = BeautifulSoup(resp.content, 'html.parser', parse_only=SoupStrainer('article'))
@@ -98,19 +105,17 @@ def main():
     faculties_with_links = get_faculties_list_with_links(soup)
 
     result_dict = {}
+    # submit tasks and process results
     start = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        # submit tasks and process results
-        for result in executor.map(get_faculty_people_from_links, faculties_with_links.keys(),
-                                   faculties_with_links.values()):
-            result_dict.update(result)
+    results = await asyncio.gather(
+        *[get_faculty_people_from_links(key, value) for key, value in faculties_with_links.items()])
     delta = time.perf_counter() - start
     logger.info(f"Asynchronous time: {delta:.8f}s")
     # print(results)
 
     with open(FILENAME, 'w') as json_file:
-        json.dump(result_dict, json_file, indent=4)
+        json.dump(results, json_file, indent=4)
 
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
